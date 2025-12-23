@@ -17,23 +17,30 @@ except ImportError:
 from collections import deque
 from pathlib import Path
 
+# Setup logging first
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 # Try to import from config_vc.py (local development)
 # If not available, use environment variables (production/Render)
 try:
     from config_vc import API_ID, API_HASH, BOT_TOKEN, DOWNLOAD_PATH
+    logger.info("Using local config_vc.py")
 except ImportError:
     # Running on production (Render) - use environment variables
     API_ID = int(os.getenv('API_ID'))
     API_HASH = os.getenv('API_HASH')
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     DOWNLOAD_PATH = os.path.join(Path(__file__).parent, 'downloads')
-
-# Setup logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
+    
+    # Debug: Log loaded values (hide sensitive parts)
+    logger.info(f"Using environment variables:")
+    logger.info(f"API_ID: {API_ID}")
+    logger.info(f"API_HASH: {API_HASH[:8]}..." if API_HASH else "API_HASH: None")
+    logger.info(f"BOT_TOKEN: {BOT_TOKEN[:15]}..." if BOT_TOKEN else "BOT_TOKEN: None")
 
 # Create downloads directory
 os.makedirs(DOWNLOAD_PATH, exist_ok=True)
