@@ -90,67 +90,91 @@ def get_queue(chat_id):
 
 
 async def download_audio(query: str, msg: Message):
-    """Download audio from YouTube"""
-    # Base options that work everywhere
+    """Download audio from YouTube with retry logic"""
+    # Enhanced options for bot detection bypass
     base_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(DOWNLOAD_PATH, '%(id)s.%(ext)s'),
         'quiet': True,
         'no_warnings': True,
-        'extractor_args': {'youtube': {'skip': ['hls', 'dash']}},
+        'extract_flat': False,
+        'nocheckcertificate': True,
+        'prefer_insecure': False,
+        'age_limit': None,
+        'geo_bypass': True,
+        'socket_timeout': 30,
+        'retries': 3,
+        'fragment_retries': 3,
+        'extractor_retries': 3,
+        'file_access_retries': 3,
+        'extractor_args': {
+            'youtube': {
+                'skip': ['hls', 'dash', 'translated_subs'],
+                'player_skip': ['js', 'configs', 'webpage'],
+                'player_client': ['android', 'web'],
+            }
+        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
+            'Accept-Encoding': 'gzip, deflate',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
         },
-        'age_limit': None,
-        'geo_bypass': True,
     }
     
-    # Try with browser cookies first (local only)
-    try:
-        ydl_opts = base_opts.copy()
-        ydl_opts['cookiesfrombrowser'] = ('chrome',)
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-            if info and 'entries' in info:
-                video = info['entries'][0]
-                filename = ydl.prepare_filename(video)
-                
-                return {
-                    'file': filename,
-                    'title': video['title'],
-                    'duration': video.get('duration', 0),
-                    'url': video['webpage_url'],
-                    'thumbnail': video.get('thumbnail'),
-                    'requested_by': msg.from_user.mention
-                }
-    except Exception as e:
-        logger.warning(f"Cookie extraction failed, trying without cookies: {str(e)[:100]}")
+    # Try multiple strategies with delays between attempts
+    strategies = [
+        # Strategy 1: Try with cookies (local only)
+        lambda opts: {**opts, 'cookiesfrombrowser': ('chrome',)},
+        # Strategy 2: Use Android client
+        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['android']}}},
+        # Strategy 3: Use web client with sleep
+        lambda opts: opts.copy(),
+    ]
     
-    # Fallback: Try without cookies (works on servers)
-    try:
-        with yt_dlp.YoutubeDL(base_opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{query}", download=True)
-            if not info or 'entries' not in info:
-                return None
+    for attempt, strategy in enumerate(strategies, 1):
+        try:
+            if attempt > 1:
+                # Add delay between retries (exponential backoff)
+                wait_time = 2 ** (attempt - 1)
+                logger.info(f"Attempt {attempt}: Waiting {wait_time}s before retry...")
+                await asyncio.sleep(wait_time)
             
-            video = info['entries'][0]
-            filename = ydl.prepare_filename(video)
+            ydl_opts = strategy(base_opts)
             
-            return {
-                'file': filename,
-                'title': video['title'],
-                'duration': video.get('duration', 0),
-                'url': video['webpage_url'],
-                'thumbnail': video.get('thumbnail'),
-                'requested_by': msg.from_user.mention
-            }
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        return None
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                if info and 'entries' in info and len(info['entries']) > 0:
+                    video = info['entries'][0]
+                    filename = ydl.prepare_filename(video)
+                    
+                    logger.info(f"Successfully downloaded: {video['title']}")
+                    return {
+                        'file': filename,
+                        'title': video['title'],
+                        'duration': video.get('duration', 0),
+                        'url': video['webpage_url'],
+                        'thumbnail': video.get('thumbnail'),
+                        'requested_by': msg.from_user.mention
+                    }
+        except Exception as e:
+            error_msg = str(e)
+            if 'could not find chrome cookies' in error_msg.lower():
+                logger.debug(f"Attempt {attempt}: No Chrome cookies available, trying next strategy")
+                continue
+            elif 'sign in to confirm' in error_msg.lower() or 'bot' in error_msg.lower():
+                logger.warning(f"Attempt {attempt}: Bot detection triggered, trying next strategy")
+                continue
+            else:
+                logger.error(f"Attempt {attempt} error: {str(e)[:150]}")
+                if attempt == len(strategies):
+                    return None
+    
+    logger.error("All download strategies failed")
+    return None
 
 
 async def play_next(chat_id: int):
@@ -425,7 +449,7 @@ async def download(client, message: Message):
     query = " ".join(message.command[1:])
     msg = await message.reply_text(f"🔍 **Searching:** `{query}`...")
     
-    # Base options that work everywhere
+    # Enhanced options for bot detection bypass
     base_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{
@@ -435,23 +459,27 @@ async def download(client, message: Message):
         }],
         'outtmpl': os.path.join(DOWNLOAD_PATH, '%(title)s.%(ext)s'),
         'quiet': True,
-        'extractor_args': {'youtube': {'skip': ['hls', 'dash']}},
+        'nocheckcertificate': True,
+        'socket_timeout': 30,
+        'retries': 3,
+        'extractor_args': {
+            'youtube': {
+                'skip': ['hls', 'dash'],
+                'player_client': ['android', 'web'],
+            }
+        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
+            'DNT': '1',
         },
         'age_limit': None,
         'geo_bypass': True,
     }
     
-    # Try with cookies first, then without
+    # Try multiple times with delay
     ydl_opts = base_opts.copy()
-    try:
-        ydl_opts['cookiesfrombrowser'] = ('chrome',)
-    except:
-        pass  # Skip cookies if not available
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
