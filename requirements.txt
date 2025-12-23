@@ -1,0 +1,10 @@
+# Voice Chat bot requirements (compatible with Python 3.13)
+pyrogram==2.0.106
+py-tgcalls==0.9.7
+yt-dlp
+
+# Web server for 24/7 hosting (Render.com keep-alive)
+aiohttp>=3.8.0
+
+# Optional but recommended
+tgcrypto
