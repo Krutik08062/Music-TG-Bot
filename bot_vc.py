@@ -40,7 +40,7 @@ os.makedirs(DOWNLOAD_PATH, exist_ok=True)
 
 # Initialize Pyrogram client
 app = Client(
-    "music_bot",
+    "music_bot_v2",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
