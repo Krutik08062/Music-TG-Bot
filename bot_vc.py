@@ -128,23 +128,28 @@ async def download_audio(query: str, msg: Message):
     
     # Check for manual cookies from environment
     youtube_cookies = os.getenv('YOUTUBE_COOKIES')
+    cookie_file_path = None
     if youtube_cookies:
         logger.info("[DOWNLOAD] Using cookies from YOUTUBE_COOKIES environment variable")
-        # Save cookies to temporary file
+        # Save cookies to temporary file with proper format
         import tempfile
-        cookie_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
+        cookie_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt', encoding='utf-8')
         cookie_file.write(youtube_cookies)
         cookie_file.close()
-        base_opts['cookiefile'] = cookie_file.name
+        cookie_file_path = cookie_file.name
+        base_opts['cookiefile'] = cookie_file_path
+        logger.info(f"[DOWNLOAD] Cookie file created at: {cookie_file_path}")
+    else:
+        logger.warning("[DOWNLOAD] No YouTube cookies found in environment")
     
     # Try multiple strategies with delays between attempts
     strategies = [
-        # Strategy 1: Android client (most reliable on servers)
-        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['android']}}},
-        # Strategy 2: Try different format selection
-        lambda opts: {**opts, 'format': 'ba[ext=m4a]/ba[ext=webm]/ba'},
-        # Strategy 3: Use TV client
-        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['tv_embedded']}}},
+        # Strategy 1: Android client with cookies (most reliable)
+        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['android']}}, 'verbose': True, 'quiet': False},
+        # Strategy 2: iOS client
+        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['ios']}}, 'verbose': True, 'quiet': False},
+        # Strategy 3: Web client with cookies
+        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['web']}}, 'format': 'ba[ext=m4a]/ba', 'verbose': True, 'quiet': False},
     ]
     
     for attempt, strategy in enumerate(strategies, 1):
@@ -174,33 +179,44 @@ async def download_audio(query: str, msg: Message):
                     }
         except Exception as e:
             error_msg = str(e)
+            error_type = type(e).__name__
+            
+            # Log full error for debugging
+            logger.error(f"[DOWNLOAD] Attempt {attempt} failed: {error_type}")
+            logger.error(f"[DOWNLOAD] Error message: {error_msg[:300]}")
+            
             if 'could not find chrome cookies' in error_msg.lower():
                 logger.debug(f"Attempt {attempt}: No Chrome cookies available, trying next strategy")
                 continue
             elif 'sign in to confirm' in error_msg.lower() or 'bot' in error_msg.lower():
                 logger.warning(f"Attempt {attempt}: Bot detection triggered, trying next strategy")
                 continue
+            elif 'private' in error_msg.lower() or 'unavailable' in error_msg.lower():
+                logger.warning(f"Attempt {attempt}: Video unavailable or private")
+                continue
             else:
-                logger.error(f"Attempt {attempt} error: {str(e)[:150]}")
+                logger.error(f"Attempt {attempt}: Unhandled error, trying next strategy")
                 if attempt == len(strategies):
                     # Cleanup temp cookie file if exists
-                    if youtube_cookies and 'cookiefile' in base_opts:
+                    if cookie_file_path:
                         try:
                             import os as os_module
-                            os_module.remove(base_opts['cookiefile'])
+                            os_module.remove(cookie_file_path)
                         except:
                             pass
                     return None
+                continue
     
     # Cleanup temp cookie file if exists
-    if youtube_cookies and 'cookiefile' in base_opts:
+    if cookie_file_path:
         try:
             import os as os_module
-            os_module.remove(base_opts['cookiefile'])
-        except:
-            pass
+            os_module.remove(cookie_file_path)
+            logger.info("[DOWNLOAD] Cleaned up temporary cookie file")
+        except Exception as cleanup_error:
+            logger.warning(f"[DOWNLOAD] Failed to cleanup cookie file: {cleanup_error}")
     
-    logger.error("[DOWNLOAD] All download strategies failed")
+    logger.error("[DOWNLOAD] All download strategies failed after trying all methods")
     return None
 
 
