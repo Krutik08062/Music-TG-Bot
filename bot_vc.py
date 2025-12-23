@@ -162,8 +162,26 @@ async def download_audio(query: str, msg: Message):
             
             ydl_opts = strategy(base_opts)
             
+            logger.info(f"[DOWNLOAD] Attempt {attempt}: Trying with {ydl_opts.get('extractor_args', {}).get('youtube', {}).get('player_client', ['unknown'])[0]} client")
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                
+                # Check if search returned any results
+                if not info or 'entries' not in info or len(info['entries']) == 0:
+                    logger.error(f"[DOWNLOAD] Attempt {attempt}: Search returned 0 results for query: {query}")
+                    if attempt == len(strategies):
+                        # On last attempt, return None with specific error
+                        logger.error("[DOWNLOAD] No search results found after all attempts")
+                        if cookie_file_path:
+                            try:
+                                import os as os_module
+                                os_module.remove(cookie_file_path)
+                            except:
+                                pass
+                        return None
+                    continue
+                
                 if info and 'entries' in info and len(info['entries']) > 0:
                     video = info['entries'][0]
                     filename = ydl.prepare_filename(video)
@@ -351,23 +369,23 @@ async def play(client, message: Message):
     if not song:
         try:
             await msg.edit_text(
-                "❌ **Download failed!**\n\n"
-                "YouTube is currently blocking automated downloads on this server.\n\n"
-                "**Try these alternatives:**\n"
-                "• Use more specific search terms\n"
-                "• Try a different song\n"
-                "• Wait a few minutes and try again\n\n"
-                "_This is a YouTube limitation, not a bot issue._"
+                "❌ **No results found!**\n\n"
+                "YouTube search returned no results for this query.\n\n"
+                "**Try these:**\n"
+                "• Add artist name: `/play tum ho rockstar`\n"
+                "• Be more specific: `/play tum ho toh rockstar arjit singh`\n"
+                "• Try different song\n\n"
+                "_Tip: More specific queries work better!_"
             )
         except:
             await message.reply_text(
-                "❌ **Download failed!**\n\n"
-                "YouTube is currently blocking automated downloads on this server.\n\n"
-                "**Try these alternatives:**\n"
-                "• Use more specific search terms\n"
-                "• Try a different song\n"
-                "• Wait a few minutes and try again\n\n"
-                "_This is a YouTube limitation, not a bot issue._"
+                "❌ **No results found!**\n\n"
+                "YouTube search returned no results for this query.\n\n"
+                "**Try these:**\n"
+                "• Add artist name: `/play tum ho rockstar`\n"
+                "• Be more specific: `/play tum ho toh rockstar arjit singh`\n"
+                "• Try different song\n\n"
+                "_Tip: More specific queries work better!_"
             )
         return
     
