@@ -91,6 +91,8 @@ def get_queue(chat_id):
 
 async def download_audio(query: str, msg: Message):
     """Download audio from YouTube with retry logic"""
+    logger.info(f"[DOWNLOAD] Starting download for query: {query}")
+    
     # Enhanced options for bot detection bypass
     base_opts = {
         'format': 'bestaudio/best',
@@ -103,36 +105,46 @@ async def download_audio(query: str, msg: Message):
         'age_limit': None,
         'geo_bypass': True,
         'socket_timeout': 30,
-        'retries': 3,
-        'fragment_retries': 3,
-        'extractor_retries': 3,
-        'file_access_retries': 3,
+        'retries': 5,
+        'fragment_retries': 5,
+        'extractor_retries': 5,
+        'file_access_retries': 5,
         'extractor_args': {
             'youtube': {
                 'skip': ['hls', 'dash', 'translated_subs'],
-                'player_skip': ['js', 'configs', 'webpage'],
-                'player_client': ['android', 'web'],
+                'player_client': ['android'],
+                'player_skip': ['configs', 'webpage'],
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
+            'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
             'Accept-Encoding': 'gzip, deflate',
-            'DNT': '1',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
+            'X-YouTube-Client-Name': '3',
+            'X-YouTube-Client-Version': '17.36.4',
         },
     }
     
+    # Check for manual cookies from environment
+    youtube_cookies = os.getenv('YOUTUBE_COOKIES')
+    if youtube_cookies:
+        logger.info("[DOWNLOAD] Using cookies from YOUTUBE_COOKIES environment variable")
+        # Save cookies to temporary file
+        import tempfile
+        cookie_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.txt')
+        cookie_file.write(youtube_cookies)
+        cookie_file.close()
+        base_opts['cookiefile'] = cookie_file.name
+    
     # Try multiple strategies with delays between attempts
     strategies = [
-        # Strategy 1: Try with cookies (local only)
-        lambda opts: {**opts, 'cookiesfrombrowser': ('chrome',)},
-        # Strategy 2: Use Android client
+        # Strategy 1: Android client (most reliable on servers)
         lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['android']}}},
-        # Strategy 3: Use web client with sleep
-        lambda opts: opts.copy(),
+        # Strategy 2: Try different format selection
+        lambda opts: {**opts, 'format': 'ba[ext=m4a]/ba[ext=webm]/ba'},
+        # Strategy 3: Use TV client
+        lambda opts: {**opts, 'extractor_args': {'youtube': {'player_client': ['tv_embedded']}}},
     ]
     
     for attempt, strategy in enumerate(strategies, 1):
@@ -171,9 +183,24 @@ async def download_audio(query: str, msg: Message):
             else:
                 logger.error(f"Attempt {attempt} error: {str(e)[:150]}")
                 if attempt == len(strategies):
+                    # Cleanup temp cookie file if exists
+                    if youtube_cookies and 'cookiefile' in base_opts:
+                        try:
+                            import os as os_module
+                            os_module.remove(base_opts['cookiefile'])
+                        except:
+                            pass
                     return None
     
-    logger.error("All download strategies failed")
+    # Cleanup temp cookie file if exists
+    if youtube_cookies and 'cookiefile' in base_opts:
+        try:
+            import os as os_module
+            os_module.remove(base_opts['cookiefile'])
+        except:
+            pass
+    
+    logger.error("[DOWNLOAD] All download strategies failed")
     return None
 
 
@@ -288,6 +315,8 @@ async def about(client, message: Message):
 @app.on_message(filters.command("play"))
 async def play(client, message: Message):
     """Play music in voice chat"""
+    logger.info(f"[PLAY] Command received from {message.from_user.id} in chat {message.chat.id}")
+    
     if len(message.command) < 2:
         await message.reply_text(
             "❌ **Usage:** `/play <song name>`\n\n"
@@ -304,7 +333,26 @@ async def play(client, message: Message):
     song = await download_audio(query, message)
     
     if not song:
-        await msg.edit_text("❌ **Not found!** Try different keywords.")
+        try:
+            await msg.edit_text(
+                "❌ **Download failed!**\n\n"
+                "YouTube is currently blocking automated downloads on this server.\n\n"
+                "**Try these alternatives:**\n"
+                "• Use more specific search terms\n"
+                "• Try a different song\n"
+                "• Wait a few minutes and try again\n\n"
+                "_This is a YouTube limitation, not a bot issue._"
+            )
+        except:
+            await message.reply_text(
+                "❌ **Download failed!**\n\n"
+                "YouTube is currently blocking automated downloads on this server.\n\n"
+                "**Try these alternatives:**\n"
+                "• Use more specific search terms\n"
+                "• Try a different song\n"
+                "• Wait a few minutes and try again\n\n"
+                "_This is a YouTube limitation, not a bot issue._"
+            )
         return
     
     queue = get_queue(chat_id)
@@ -486,7 +534,18 @@ async def download(client, message: Message):
             info = ydl.extract_info(f"ytsearch1:{query}", download=True)
             
             if not info or 'entries' not in info:
-                await msg.edit_text("❌ **Not found!**")
+                try:
+                    await msg.edit_text(
+                        "❌ **Download failed!**\n\n"
+                        "YouTube is blocking automated downloads.\n"
+                        "Try a different song or wait a few minutes."
+                    )
+                except:
+                    await message.reply_text(
+                        "❌ **Download failed!**\n\n"
+                        "YouTube is blocking automated downloads.\n"
+                        "Try a different song or wait a few minutes."
+                    )
                 return
             
             video = info['entries'][0]
@@ -494,15 +553,24 @@ async def download(client, message: Message):
             duration = video.get('duration', 0)
             
             if duration > 600:
-                await msg.edit_text("❌ **Song too long!** (Max 10 minutes)")
+                try:
+                    await msg.edit_text("❌ **Song too long!** (Max 10 minutes)")
+                except:
+                    await message.reply_text("❌ **Song too long!** (Max 10 minutes)")
                 return
             
-            await msg.edit_text("⬇️ **Downloading...**")
+            try:
+                await msg.edit_text("⬇️ **Downloading...**")
+            except:
+                msg = await message.reply_text("⬇️ **Downloading...**")
             
             filename = ydl.prepare_filename(video)
             mp3_file = os.path.splitext(filename)[0] + '.mp3'
             
-            await msg.edit_text("📤 **Uploading...**")
+            try:
+                await msg.edit_text("📤 **Uploading...**")
+            except:
+                msg = await message.reply_text("📤 **Uploading...**")
             
             await message.reply_audio(
                 audio=mp3_file,
@@ -511,7 +579,10 @@ async def download(client, message: Message):
                 caption=f"🎵 {title}"
             )
             
-            await msg.delete()
+            try:
+                await msg.delete()
+            except:
+                pass
             await message.reply_text("✅ **Download complete!**")
             
             # Cleanup
@@ -519,7 +590,18 @@ async def download(client, message: Message):
             
     except Exception as e:
         logger.error(f"Download error: {e}")
-        await msg.edit_text("❌ **An error occurred!**")
+        try:
+            await msg.edit_text(
+                "❌ **An error occurred!**\n\n"
+                "YouTube may be blocking downloads.\n"
+                "Try again later or with a different song."
+            )
+        except:
+            await message.reply_text(
+                "❌ **An error occurred!**\n\n"
+                "YouTube may be blocking downloads.\n"
+                "Try again later or with a different song."
+            )
 
 
 async def main():
