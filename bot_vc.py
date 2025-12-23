@@ -91,25 +91,48 @@ def get_queue(chat_id):
 
 async def download_audio(query: str, msg: Message):
     """Download audio from YouTube"""
+    # Base options that work everywhere
+    base_opts = {
+        'format': 'bestaudio/best',
+        'outtmpl': os.path.join(DOWNLOAD_PATH, '%(id)s.%(ext)s'),
+        'quiet': True,
+        'no_warnings': True,
+        'extractor_args': {'youtube': {'skip': ['hls', 'dash']}},
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        'age_limit': None,
+        'geo_bypass': True,
+    }
+    
+    # Try with browser cookies first (local only)
     try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': os.path.join(DOWNLOAD_PATH, '%(id)s.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
-            'cookiesfrombrowser': ('chrome',),  # Try to use Chrome cookies
-            'extractor_args': {'youtube': {'skip': ['hls', 'dash']}},
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-                'Sec-Fetch-Mode': 'navigate',
-            },
-            'age_limit': None,
-            'geo_bypass': True,
-        }
+        ydl_opts = base_opts.copy()
+        ydl_opts['cookiesfrombrowser'] = ('chrome',)
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+            if info and 'entries' in info:
+                video = info['entries'][0]
+                filename = ydl.prepare_filename(video)
+                
+                return {
+                    'file': filename,
+                    'title': video['title'],
+                    'duration': video.get('duration', 0),
+                    'url': video['webpage_url'],
+                    'thumbnail': video.get('thumbnail'),
+                    'requested_by': msg.from_user.mention
+                }
+    except Exception as e:
+        logger.warning(f"Cookie extraction failed, trying without cookies: {str(e)[:100]}")
+    
+    # Fallback: Try without cookies (works on servers)
+    try:
+        with yt_dlp.YoutubeDL(base_opts) as ydl:
             info = ydl.extract_info(f"ytsearch1:{query}", download=True)
             if not info or 'entries' not in info:
                 return None
@@ -402,28 +425,35 @@ async def download(client, message: Message):
     query = " ".join(message.command[1:])
     msg = await message.reply_text(f"🔍 **Searching:** `{query}`...")
     
+    # Base options that work everywhere
+    base_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': os.path.join(DOWNLOAD_PATH, '%(title)s.%(ext)s'),
+        'quiet': True,
+        'extractor_args': {'youtube': {'skip': ['hls', 'dash']}},
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        'age_limit': None,
+        'geo_bypass': True,
+    }
+    
+    # Try with cookies first, then without
+    ydl_opts = base_opts.copy()
     try:
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': os.path.join(DOWNLOAD_PATH, '%(title)s.%(ext)s'),
-            'quiet': True,
-            'cookiesfrombrowser': ('chrome',),  # Try to use Chrome cookies
-            'extractor_args': {'youtube': {'skip': ['hls', 'dash']}},
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-                'Sec-Fetch-Mode': 'navigate',
-            },
-            'age_limit': None,
-            'geo_bypass': True,
-        }
-        
+        ydl_opts['cookiesfrombrowser'] = ('chrome',)
+    except:
+        pass  # Skip cookies if not available
+    
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"ytsearch1:{query}", download=True)
             
