@@ -9,7 +9,7 @@ import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from pytgcalls import PyTgCalls
-from pytgcalls.types import AudioPiped
+from pytgcalls.types import MediaStream
 try:
     import yt_dlp
 except ImportError:
@@ -119,7 +119,7 @@ async def play_next(chat_id: int):
     
     if queue.is_empty():
         try:
-            await pytgcalls.leave_group_call(chat_id)
+            await pytgcalls.leave_call(chat_id)
         except:
             pass
         return
@@ -129,18 +129,20 @@ async def play_next(chat_id: int):
     try:
         await pytgcalls.play(
             chat_id,
-            AudioPiped(next_song['file'])
+            MediaStream(next_song['file'])
         )
     except Exception as e:
         logger.error(f"Play error: {e}")
         await play_next(chat_id)
 
 
-@pytgcalls.on_stream_end()
-async def on_stream_end(client, update):
+@pytgcalls.on_update()
+async def on_update_handler(client, update):
     """Auto-play next song when current ends"""
-    chat_id = update.chat_id
-    await play_next(chat_id)
+    # Check if it's a stream ended event
+    if hasattr(update, 'chat_id'):
+        chat_id = update.chat_id
+        await play_next(chat_id)
 
 
 @app.on_message(filters.command("start"))
@@ -321,7 +323,7 @@ async def stop(client, message: Message):
     queue = get_queue(chat_id)
     
     try:
-        await pytgcalls.leave_group_call(chat_id)
+        await pytgcalls.leave_call(chat_id)
         queue.clear()
         await message.reply_text("⏹ **Stopped!** Left voice chat.")
     except Exception as e:
