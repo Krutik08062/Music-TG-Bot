@@ -93,6 +93,11 @@ async def download_audio(query: str, msg: Message):
     """Download audio from YouTube with retry logic"""
     logger.info(f"[DOWNLOAD] Starting download for query: {query}")
     
+    # Check if it's a direct YouTube URL
+    is_url = query.startswith(('http://', 'https://', 'youtu.be', 'youtube.com'))
+    if is_url:
+        logger.info("[DOWNLOAD] Direct URL detected, skipping search")
+    
     # Enhanced options for bot detection bypass
     base_opts = {
         'format': 'bestaudio/best',
@@ -165,36 +170,47 @@ async def download_audio(query: str, msg: Message):
             logger.info(f"[DOWNLOAD] Attempt {attempt}: Trying with {ydl_opts.get('extractor_args', {}).get('youtube', {}).get('player_client', ['unknown'])[0]} client")
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(f"ytsearch1:{query}", download=True)
+                # Use direct URL or search
+                search_query = query if is_url else f"ytsearch5:{query}"
+                info = ydl.extract_info(search_query, download=True)
                 
-                # Check if search returned any results
-                if not info or 'entries' not in info or len(info['entries']) == 0:
-                    logger.error(f"[DOWNLOAD] Attempt {attempt}: Search returned 0 results for query: {query}")
-                    if attempt == len(strategies):
-                        # On last attempt, return None with specific error
-                        logger.error("[DOWNLOAD] No search results found after all attempts")
-                        if cookie_file_path:
-                            try:
-                                import os as os_module
-                                os_module.remove(cookie_file_path)
-                            except:
-                                pass
-                        return None
-                    continue
-                
-                if info and 'entries' in info and len(info['entries']) > 0:
-                    video = info['entries'][0]
-                    filename = ydl.prepare_filename(video)
+                # Handle both direct URL and search results
+                if is_url:
+                    # Direct URL - info is the video itself
+                    if not info:
+                        continue
+                    video = info
+                else:
+                    # Search results - check if we got any entries
+                    if not info or 'entries' not in info or len(info['entries']) == 0:
+                        logger.error(f"[DOWNLOAD] Attempt {attempt}: Search returned 0 results for query: {query}")
+                        if attempt == len(strategies):
+                            # On last attempt, return None with specific error
+                            logger.error("[DOWNLOAD] No search results found after all attempts")
+                            if cookie_file_path:
+                                try:
+                                    import os as os_module
+                                    os_module.remove(cookie_file_path)
+                                except:
+                                    pass
+                            return None
+                        continue
                     
-                    logger.info(f"Successfully downloaded: {video['title']}")
-                    return {
-                        'file': filename,
-                        'title': video['title'],
-                        'duration': video.get('duration', 0),
-                        'url': video['webpage_url'],
-                        'thumbnail': video.get('thumbnail'),
-                        'requested_by': msg.from_user.mention
-                    }
+                    # Get first result from search
+                    video = info['entries'][0]
+                
+                # Prepare filename (works for both URL and search)
+                filename = ydl.prepare_filename(video)
+                
+                logger.info(f"Successfully downloaded: {video['title']}")
+                return {
+                    'file': filename,
+                    'title': video['title'],
+                    'duration': video.get('duration', 0),
+                    'url': video['webpage_url'],
+                    'thumbnail': video.get('thumbnail'),
+                    'requested_by': msg.from_user.mention
+                }
         except Exception as e:
             error_msg = str(e)
             error_type = type(e).__name__
@@ -280,6 +296,7 @@ async def start(client, message: Message):
         "• `/download <song>` - Download MP3\n\n"
         "**Voice Chat Commands:**\n"
         "• `/play <song>` - Play in voice chat\n"
+        "• `/play <YouTube URL>` - Play direct URL\n"
         "• `/pause` - Pause playback\n"
         "• `/resume` - Resume playback\n"
         "• `/skip` - Skip current song\n"
@@ -289,8 +306,9 @@ async def start(client, message: Message):
         "**Other Commands:**\n"
         "• `/help` - Show all commands\n"
         "• `/about` - About this bot\n\n"
-        "🎧 **Example:**\n"
-        "`/play perfect ed sheeran`"
+        "🎧 **Examples:**\n"
+        "`/play perfect ed sheeran`\n"
+        "`/play https://youtu.be/2Vv-BfVoq4g`"
     )
 
 
@@ -301,6 +319,7 @@ async def help_command(client, message: Message):
         "📚 **Music Bot Commands**\n\n"
         "**🎵 Voice Chat:**\n"
         "• `/play <song>` - Play song in VC\n"
+        "• `/play <URL>` - Play YouTube URL\n"
         "• `/pause` - Pause music\n"
         "• `/resume` - Resume music\n"
         "• `/skip` - Skip to next song\n"
@@ -317,7 +336,7 @@ async def help_command(client, message: Message):
         "• Add me to group & make admin\n"
         "• Start a voice chat first\n"
         "• Use `/play` to add songs\n"
-        "• Queue multiple songs!"
+        "• Direct URLs work best!"
     )
 
 
@@ -353,8 +372,10 @@ async def play(client, message: Message):
     
     if len(message.command) < 2:
         await message.reply_text(
-            "❌ **Usage:** `/play <song name>`\n\n"
-            "**Example:** `/play perfect ed sheeran`"
+            "❌ **Usage:** `/play <song name or URL>`\n\n"
+            "**Examples:**\n"
+            "• `/play perfect ed sheeran`\n"
+            "• `/play https://youtu.be/2Vv-BfVoq4g`"
         )
         return
     
@@ -370,22 +391,22 @@ async def play(client, message: Message):
         try:
             await msg.edit_text(
                 "❌ **No results found!**\n\n"
-                "YouTube search returned no results for this query.\n\n"
+                "YouTube search returned no results.\n\n"
                 "**Try these:**\n"
-                "• Add artist name: `/play tum ho rockstar`\n"
-                "• Be more specific: `/play tum ho toh rockstar arjit singh`\n"
-                "• Try different song\n\n"
-                "_Tip: More specific queries work better!_"
+                "• Use direct URL: `/play https://youtu.be/VIDEO_ID`\n"
+                "• Add artist: `/play perfect ed sheeran`\n"
+                "• Try popular English songs first\n\n"
+                "_Note: YouTube search may have regional restrictions_"
             )
         except:
             await message.reply_text(
                 "❌ **No results found!**\n\n"
-                "YouTube search returned no results for this query.\n\n"
+                "YouTube search returned no results.\n\n"
                 "**Try these:**\n"
-                "• Add artist name: `/play tum ho rockstar`\n"
-                "• Be more specific: `/play tum ho toh rockstar arjit singh`\n"
-                "• Try different song\n\n"
-                "_Tip: More specific queries work better!_"
+                "• Use direct URL: `/play https://youtu.be/VIDEO_ID`\n"
+                "• Add artist: `/play perfect ed sheeran`\n"
+                "• Try popular English songs first\n\n"
+                "_Note: YouTube search may have regional restrictions_"
             )
         return
     
